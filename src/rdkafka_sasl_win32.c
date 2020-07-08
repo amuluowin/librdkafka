@@ -541,7 +541,7 @@ static int rd_kafka_sasl_win32_conf_validate (rd_kafka_t *rk,
 const struct rd_kafka_sasl_provider rd_kafka_sasl_win32_provider = {
         .name          = "Win32 SSPI",
         .client_new    = rd_kafka_sasl_win32_client_new,
-        .recv          = rd_kafka_sasl_win32_recv,
-        .close         = rd_kafka_sasl_win32_close,
+        .precv          = rd_kafka_sasl_win32_recv,
+        .pclose         = rd_kafka_sasl_win32_close,
         .conf_validate = rd_kafka_sasl_win32_conf_validate
 };

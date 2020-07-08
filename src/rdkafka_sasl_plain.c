@@ -123,6 +123,6 @@ static int rd_kafka_sasl_plain_conf_validate (rd_kafka_t *rk,
 const struct rd_kafka_sasl_provider rd_kafka_sasl_plain_provider = {
         .name          = "PLAIN (builtin)",
         .client_new    = rd_kafka_sasl_plain_client_new,
-        .recv          = rd_kafka_sasl_plain_recv,
+        .precv          = rd_kafka_sasl_plain_recv,
         .conf_validate = rd_kafka_sasl_plain_conf_validate
 };

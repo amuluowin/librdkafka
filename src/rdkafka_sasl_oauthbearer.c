@@ -1389,8 +1389,8 @@ const struct rd_kafka_sasl_provider rd_kafka_sasl_oauthbearer_provider = {
         .term          = rd_kafka_sasl_oauthbearer_term,
         .ready         = rd_kafka_sasl_oauthbearer_ready,
         .client_new    = rd_kafka_sasl_oauthbearer_client_new,
-        .recv          = rd_kafka_sasl_oauthbearer_recv,
-        .close         = rd_kafka_sasl_oauthbearer_close,
+        .precv          = rd_kafka_sasl_oauthbearer_recv,
+        .pclose         = rd_kafka_sasl_oauthbearer_close,
         .conf_validate = rd_kafka_sasl_oauthbearer_conf_validate,
 };
 

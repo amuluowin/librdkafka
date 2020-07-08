@@ -910,8 +910,8 @@ static int rd_kafka_sasl_scram_conf_validate (rd_kafka_t *rk,
 const struct rd_kafka_sasl_provider rd_kafka_sasl_scram_provider = {
         .name          = "SCRAM (builtin)",
         .client_new    = rd_kafka_sasl_scram_client_new,
-        .recv          = rd_kafka_sasl_scram_recv,
-        .close         = rd_kafka_sasl_scram_close,
+        .precv          = rd_kafka_sasl_scram_recv,
+        .pclose         = rd_kafka_sasl_scram_close,
         .conf_validate = rd_kafka_sasl_scram_conf_validate,
 };
 

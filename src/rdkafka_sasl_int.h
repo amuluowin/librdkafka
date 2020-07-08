@@ -45,10 +45,10 @@ struct rd_kafka_sasl_provider {
                            const char *hostname,
                            char *errstr, size_t errstr_size);
 
-        int (*recv) (struct rd_kafka_transport_s *s,
+        int (*precv) (struct rd_kafka_transport_s *s,
                      const void *buf, size_t size,
                      char *errstr, size_t errstr_size);
-        void (*close) (struct rd_kafka_transport_s *);
+        void (*pclose) (struct rd_kafka_transport_s *);
 
         void (*broker_init) (rd_kafka_broker_t *rkb);
         void (*broker_term) (rd_kafka_broker_t *rkb);

@@ -142,7 +142,7 @@ int rd_kafka_sasl_recv (rd_kafka_transport_t *rktrans,
                    "Received SASL frame from broker (%"PRIusz" bytes)", len);
 
         return rktrans->rktrans_rkb->rkb_rk->
-                rk_conf.sasl.provider->recv(rktrans, buf, len,
+                rk_conf.sasl.provider->precv(rktrans, buf, len,
                                             errstr, errstr_size);
 }
 
@@ -205,8 +205,8 @@ void rd_kafka_sasl_close (rd_kafka_transport_t *rktrans) {
                 rktrans->rktrans_rkb->rkb_rk->rk_conf.
                 sasl.provider;
 
-        if (provider && provider->close)
-                provider->close(rktrans);
+        if (provider && provider->pclose)
+                provider->pclose(rktrans);
 }
 
 

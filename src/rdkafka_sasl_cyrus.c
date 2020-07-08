@@ -639,7 +639,7 @@ const struct rd_kafka_sasl_provider rd_kafka_sasl_cyrus_provider = {
         .init          = rd_kafka_sasl_cyrus_init,
         .term          = rd_kafka_sasl_cyrus_term,
         .client_new    = rd_kafka_sasl_cyrus_client_new,
-        .recv          = rd_kafka_sasl_cyrus_recv,
-        .close         = rd_kafka_sasl_cyrus_close,
+        .precv          = rd_kafka_sasl_cyrus_recv,
+        .pclose         = rd_kafka_sasl_cyrus_close,
         .conf_validate = rd_kafka_sasl_cyrus_conf_validate
 };

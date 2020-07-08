@@ -133,7 +133,26 @@ int mtx_lock(mtx_t *mtx)
   }
   return thrd_success;
 #else
-  return pthread_mutex_lock(mtx) == 0 ? thrd_success : thrd_error;
+  // return pthread_mutex_lock(mtx) == 0 ? thrd_success : thrd_error;
+  struct timespec tout;
+  uint8_t times = 0;
+  while (mtx_trylock(mtx) == thrd_busy)
+  {
+    clock_gettime(CLOCK_REALTIME, &tout);
+    tout.tv_nsec += 10;
+    switch (pthread_mutex_timedlock(mtx, &tout)) {
+      case 0:
+        return thrd_success;
+      case ETIMEDOUT:
+        if(times++ < 100)
+        {
+          continue;
+        }
+        return thrd_timedout;
+      default:
+        return thrd_error;
+    }
+  }
 #endif
 }
 
