@@ -33,7 +33,7 @@
 /* for struct iovec */
 #include <sys/socket.h>
 #include <sys/types.h>
-#include "../../../include/socket_hook.h"
+#include "ext/swoole/include/socket_hook.h"
 #endif
 
 #include "rdsysqueue.h"
