@@ -503,6 +503,8 @@ static void rd_kafka_txn_partition_registered (rd_kafka_toppar_t *rktp) {
         TAILQ_REMOVE(&rk->rk_eos.txn_waitresp_rktps, rktp, rktp_txnlink);
         mtx_unlock(&rk->rk_eos.txn_pending_lock);
 
+        /* Not destroy()/keep():ing rktp since it just changes tailq. */
+
         TAILQ_INSERT_TAIL(&rk->rk_eos.txn_rktps, rktp, rktp_txnlink);
 }
 
@@ -611,6 +613,7 @@ static void rd_kafka_txn_handle_AddPartitionsToTxn (rd_kafka_t *rk,
                                 break;
 
                         case RD_KAFKA_RESP_ERR_TRANSACTIONAL_ID_AUTHORIZATION_FAILED:
+                        case RD_KAFKA_RESP_ERR_CLUSTER_AUTHORIZATION_FAILED:
                         case RD_KAFKA_RESP_ERR_INVALID_PRODUCER_ID_MAPPING:
                         case RD_KAFKA_RESP_ERR_INVALID_PRODUCER_EPOCH:
                         case RD_KAFKA_RESP_ERR_INVALID_TXN_STATE:
@@ -846,18 +849,22 @@ void rd_kafka_txn_schedule_register_partitions (rd_kafka_t *rk,
 
 
 /**
- * @brief Clears \p flag from all rktps in \p tqh
+ * @brief Clears \p flag from all rktps and destroys them, emptying
+ *        and reinitializing the \p tqh.
  */
 static void rd_kafka_txn_clear_partitions_flag (rd_kafka_toppar_tqhead_t *tqh,
                                                 int flag) {
-        rd_kafka_toppar_t *rktp;
+        rd_kafka_toppar_t *rktp, *tmp;
 
-        TAILQ_FOREACH(rktp, tqh, rktp_txnlink) {
+        TAILQ_FOREACH_SAFE(rktp, tqh, rktp_txnlink, tmp) {
                 rd_kafka_toppar_lock(rktp);
                 rd_dassert(rktp->rktp_flags & flag);
                 rktp->rktp_flags &= ~flag;
                 rd_kafka_toppar_unlock(rktp);
+                rd_kafka_toppar_destroy(rktp);
         }
+
+        TAILQ_INIT(tqh);
 }
 
 
@@ -871,8 +878,6 @@ static void rd_kafka_txn_clear_pending_partitions (rd_kafka_t *rk) {
                                            RD_KAFKA_TOPPAR_F_PEND_TXN);
         rd_kafka_txn_clear_partitions_flag(&rk->rk_eos.txn_waitresp_rktps,
                                            RD_KAFKA_TOPPAR_F_PEND_TXN);
-        TAILQ_INIT(&rk->rk_eos.txn_pending_rktps);
-        TAILQ_INIT(&rk->rk_eos.txn_waitresp_rktps);
 }
 
 /**
@@ -883,7 +888,6 @@ static void rd_kafka_txn_clear_pending_partitions (rd_kafka_t *rk) {
 static void rd_kafka_txn_clear_partitions (rd_kafka_t *rk) {
         rd_kafka_txn_clear_partitions_flag(&rk->rk_eos.txn_rktps,
                                            RD_KAFKA_TOPPAR_F_IN_TXN);
-        TAILQ_INIT(&rk->rk_eos.txn_rktps);
 }
 
 
@@ -1454,6 +1458,7 @@ static void rd_kafka_txn_handle_TxnOffsetCommit (rd_kafka_t *rk,
                 break;
 
         case RD_KAFKA_RESP_ERR_TRANSACTIONAL_ID_AUTHORIZATION_FAILED:
+        case RD_KAFKA_RESP_ERR_CLUSTER_AUTHORIZATION_FAILED:
         case RD_KAFKA_RESP_ERR_INVALID_PRODUCER_ID_MAPPING:
         case RD_KAFKA_RESP_ERR_INVALID_PRODUCER_EPOCH:
         case RD_KAFKA_RESP_ERR_INVALID_TXN_STATE:
@@ -1664,6 +1669,7 @@ static void rd_kafka_txn_handle_AddOffsetsToTxn (rd_kafka_t *rk,
                 break;
 
         case RD_KAFKA_RESP_ERR_TRANSACTIONAL_ID_AUTHORIZATION_FAILED:
+        case RD_KAFKA_RESP_ERR_CLUSTER_AUTHORIZATION_FAILED:
         case RD_KAFKA_RESP_ERR_INVALID_PRODUCER_EPOCH:
         case RD_KAFKA_RESP_ERR_INVALID_TXN_STATE:
         case RD_KAFKA_RESP_ERR_UNSUPPORTED_FOR_MESSAGE_FORMAT:
@@ -1971,6 +1977,7 @@ static void rd_kafka_txn_handle_EndTxn (rd_kafka_t *rk,
 
         case RD_KAFKA_RESP_ERR_INVALID_PRODUCER_EPOCH:
         case RD_KAFKA_RESP_ERR_TRANSACTIONAL_ID_AUTHORIZATION_FAILED:
+        case RD_KAFKA_RESP_ERR_CLUSTER_AUTHORIZATION_FAILED:
         case RD_KAFKA_RESP_ERR_INVALID_TXN_STATE:
                 actions |= RD_KAFKA_ERR_ACTION_FATAL;
                 break;
@@ -2486,6 +2493,7 @@ rd_kafka_txn_handle_FindCoordinator (rd_kafka_t *rk,
                 return;
 
         case RD_KAFKA_RESP_ERR_TRANSACTIONAL_ID_AUTHORIZATION_FAILED:
+        case RD_KAFKA_RESP_ERR_CLUSTER_AUTHORIZATION_FAILED:
                 rd_kafka_wrlock(rk);
                 rd_kafka_txn_set_fatal_error(
                         rkb->rkb_rk, RD_DONT_LOCK, err,

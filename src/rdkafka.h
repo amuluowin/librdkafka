@@ -566,6 +566,18 @@ typedef enum {
         /** Static consumer fenced by other consumer with same
          *  group.instance.id. */
         RD_KAFKA_RESP_ERR_FENCED_INSTANCE_ID = 82,
+        /** Eligible partition leaders are not available */
+        RD_KAFKA_RESP_ERR_ELIGIBLE_LEADERS_NOT_AVAILABLE = 83,
+        /** Leader election not needed for topic partition */
+        RD_KAFKA_RESP_ERR_ELECTION_NOT_NEEDED = 84,
+        /** No partition reassignment is in progress */
+        RD_KAFKA_RESP_ERR_NO_REASSIGNMENT_IN_PROGRESS = 85,
+        /** Deleting offsets of a topic while the consumer group is subscribed to it */
+        RD_KAFKA_RESP_ERR_GROUP_SUBSCRIBED_TO_TOPIC = 86,
+        /** Broker failed to validate record */
+        RD_KAFKA_RESP_ERR_INVALID_RECORD = 87,
+        /** There are unstable offsets that need to be cleared */
+        RD_KAFKA_RESP_ERR_UNSTABLE_OFFSET_COMMIT = 88,
 
         RD_KAFKA_RESP_ERR_END_ALL,
 } rd_kafka_resp_err_t;
@@ -1533,7 +1545,9 @@ rd_kafka_message_status (const rd_kafka_message_t *rkmessage);
  */
 typedef enum {
 	RD_KAFKA_CONF_UNKNOWN = -2, /**< Unknown configuration name. */
-	RD_KAFKA_CONF_INVALID = -1, /**< Invalid configuration value. */
+	RD_KAFKA_CONF_INVALID = -1, /**< Invalid configuration value or
+                                     *   property or value not supported in
+                                     *   this build. */
 	RD_KAFKA_CONF_OK = 0        /**< Configuration okay */
 } rd_kafka_conf_res_t;
 
@@ -1630,6 +1644,9 @@ const rd_kafka_conf_t *rd_kafka_conf (rd_kafka_t *rk);
  * @returns \c rd_kafka_conf_res_t to indicate success or failure.
  * In case of failure \p errstr is updated to contain a human readable
  * error string.
+ *
+ * @remark Setting properties or values that were disabled at build time due to
+ *         missing dependencies will return RD_KAFKA_CONF_INVALID.
  */
 RD_EXPORT
 rd_kafka_conf_res_t rd_kafka_conf_set(rd_kafka_conf_t *conf,
@@ -2327,6 +2344,9 @@ void rd_kafka_conf_dump_free(const char **arr, size_t cnt);
 /**
  * @brief Prints a table to \p fp of all supported configuration properties,
  *        their default values as well as a description.
+ *
+ * @remark All properties and properties and values are shown, even those
+ *         that have been disabled at build time due to missing dependencies.
  */
 RD_EXPORT
 void rd_kafka_conf_properties_show(FILE *fp);

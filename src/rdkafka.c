@@ -3,24 +3,24 @@
  *
  * Copyright (c) 2012-2013, Magnus Edenhill
  * All rights reserved.
- * 
+ *
  * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met: 
- * 
+ * modification, are permitted provided that the following conditions are met:
+ *
  * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer. 
+ *    this list of conditions and the following disclaimer.
  * 2. Redistributions in binary form must reproduce the above copyright notice,
  *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution. 
- * 
+ *    and/or other materials provided with the distribution.
+ *
  * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE 
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE 
- * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE 
- * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR 
- * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF 
- * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS 
- * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN 
+ * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ * ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE
+ * LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+ * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+ * SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+ * INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
  * CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
  * ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
  * POSSIBILITY OF SUCH DAMAGE.
@@ -676,6 +676,18 @@ static const struct rd_kafka_err_desc rd_kafka_err_descs[] = {
         _ERR_DESC(RD_KAFKA_RESP_ERR_FENCED_INSTANCE_ID,
                   "Broker: Static consumer fenced by other consumer with same "
                   "group.instance.id"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR_ELIGIBLE_LEADERS_NOT_AVAILABLE,
+                  "Broker: Eligible partition leaders are not available"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR_ELECTION_NOT_NEEDED,
+                  "Broker: Leader election not needed for topic partition"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR_NO_REASSIGNMENT_IN_PROGRESS,
+                  "Broker: No partition reassignment is in progress"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR_GROUP_SUBSCRIBED_TO_TOPIC,
+                  "Broker: Deleting offsets of a topic while the consumer group is subscribed to it"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR_INVALID_RECORD,
+                  "Broker: Broker failed to validate record"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR_UNSTABLE_OFFSET_COMMIT,
+                  "Broker: There are unstable offsets that need to be cleared"),
 
 	_ERR_DESC(RD_KAFKA_RESP_ERR__END, NULL)
 };
@@ -986,6 +998,27 @@ static void rd_kafka_destroy_app (rd_kafka_t *rk, int flags) {
         rd_kafka_dbg(rk, ALL, "DESTROY", "Terminating instance "
                      "(destroy flags %s (0x%x))",
                      flags ? flags_str : "none", flags);
+
+        /* If producer still has messages in queue the application
+         * is terminating the producer without first calling flush() or purge()
+         * which is a common new user mistake, so hint the user of proper
+         * shutdown semantics. */
+        if (rk->rk_type == RD_KAFKA_PRODUCER) {
+                unsigned int tot_cnt;
+                size_t tot_size;
+
+                rd_kafka_curr_msgs_get(rk, &tot_cnt, &tot_size);
+
+                if (tot_cnt > 0)
+                        rd_kafka_log(rk, LOG_WARNING, "TERMINATE",
+                                     "Producer terminating with %u message%s "
+                                     "(%"PRIusz" byte%s) still in "
+                                     "queue or transit: "
+                                     "use flush() to wait for "
+                                     "outstanding message delivery",
+                                     tot_cnt, tot_cnt > 1 ? "s" : "",
+                                     tot_size, tot_size > 1 ? "s" : "");
+        }
 
         /* Make sure destroy is not called from a librdkafka thread
          * since this will most likely cause a deadlock.
@@ -2382,7 +2415,8 @@ rd_kafka_t *rd_kafka_new (rd_kafka_type_t type, rd_kafka_conf_t *app_conf,
                      rk->rk_conf.debug);
 
         /* Log warnings for deprecated configuration */
-        rd_kafka_conf_warn(rk);
+        if (rk->rk_conf.log_conf_warn)
+                rd_kafka_conf_warn(rk);
 
         /* Free user supplied conf's base pointer on success,
          * but not the actual allocated fields since the struct

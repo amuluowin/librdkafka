@@ -72,18 +72,28 @@ case "$1" in
     ubsan)
         FSAN='-fsanitize=undefined -fsanitize-undefined-trap-on-error -fno-omit-frame-pointer'
         ;;
+    gprof)
+        # gprof
+        OPTS="$OPTS --enable-profiling"
+        ;;
     "")
         ;;
     *)
-        echo "Usage: $0 [clean|asan|tsan]"
+        echo "Usage: $0 [clean|asan|tsan|ubsan|gprof]"
         exit 1
         ;;
 esac
 
 
-# enable variable shadow warnings and strict C99, C++98 checks.
-#export CFLAGS="$CFLAGS -std=c99 -Wshadow=compatible-local -Wshadow=local"
-#export CXXFLAGS="$CXXFLAGS -std=c++98 -Wshadow=compatible-local -Wshadow=local"
+if [[ $1 != clean ]]; then
+    # enable strict C99, C++98 checks.
+    export CFLAGS="$CFLAGS -std=c99"
+    export CXXFLAGS="$CXXFLAGS -std=c++98"
+fi
+
+# enable variable shadow warnings
+#export CFLAGS="$CFLAGS -Wshadow=compatible-local -Wshadow=local"
+#export CXXFLAGS="$CXXFLAGS -Wshadow=compatible-local -Wshadow=local"
 
 # enable pedantic
 #export CFLAGS='-pedantic'
@@ -99,9 +109,6 @@ OPTS="$OPTS --enable-devel"
 
 # disable optimizations
 OPTS="$OPTS --disable-optimization"
-
-# gprof
-#OPTS="$OPTS --enable-profiling --disable-optimization"
 
 # disable lz4
 #OPTS="$OPTS --disable-lz4"

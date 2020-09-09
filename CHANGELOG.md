@@ -1,12 +1,44 @@
 # librdkafka v1.6.0
 
+## Enhancements
+
+ * The generated `CONFIGURATION.md` (through `rd_kafka_conf_properties_show())`)
+   now include all properties and values, regardless if they were included in
+   the build, and setting a disabled property or value through
+   `rd_kafka_conf_set()` now returns `RD_KAFKA_CONF_INVALID` and provides
+   a more useful error string saying why the property can't be set.
+ * Consumer configs on producers and vice versa will now be logged with
+   warning messages on client instantiation.
+   All configuration warnings can be disabled by setting
+   `log.configuration.warnings=false`.
+
+
 ## Fixes
 
 ### General fixes
 
  * `rd_kafka_topic_opaque()` (used by the C++ API) would cause object
-    refcounting issues when used on light-weight (error-only) topic objects
-    such as consumer errors (#2693)
+   refcounting issues when used on light-weight (error-only) topic objects
+   such as consumer errors (#2693).
+
+### Consumer fixes
+
+ * The `roundrobin` `partition.assignment.strategy` could crash (assert)
+   for certain combinations of members and partitions.
+   This is a regression in v1.5.0. (#3024)
+ * The C++ `KafkaConsumer` destructor did not destroy the underlying
+   C `rd_kafka_t` instance, causing a leak if `close()` was not used.
+
+### Producer fixes
+
+ * Topic authorization errors are now properly propagated for produced messages,
+   both through delivery reports and as `ERR_TOPIC_AUTHORIZATION_FAILED`
+   return value from `produce*()` (#2215)
+ * Treat cluster authentication failures as fatal in the transactional
+   producer (#2994).
+ * The transactional producer code did not properly reference-count partition
+   objects which could in very rare circumstances lead to a use-after-free bug
+   if a topic was deleted from the cluster when a transaction was using it.
 
 
 # librdkafka v1.5.0

@@ -231,6 +231,7 @@ static void do_test_txn_requires_abort_errors (void) {
         rd_kafka_resp_err_t err;
         rd_kafka_topic_partition_list_t *offsets;
         rd_kafka_consumer_group_metadata_t *cgmetadata;
+        int r;
 
         TEST_SAY(_C_MAG "[ %s ]\n", __FUNCTION__);
 
@@ -288,6 +289,11 @@ static void do_test_txn_requires_abort_errors (void) {
          * 2. Restart transaction and fail on AddPartitionsToTxn
          */
         TEST_SAY("2. Fail on AddPartitionsToTxn\n");
+
+        /* First refresh proper Metadata to clear the topic's auth error,
+         * otherwise the produce() below will fail immediately. */
+        r = test_get_partition_count(rk, "mytopic", 5000);
+        TEST_ASSERT(r > 0, "Expected topic %s to exist", "mytopic");
 
         TEST_CALL_ERROR__(rd_kafka_begin_transaction(rk));
 
@@ -761,6 +767,50 @@ static void do_test_txns_no_timeout_crash (void) {
 }
 
 
+/**
+ * @brief Test auth failure handling.
+ */
+static void do_test_txn_auth_failure (int16_t ApiKey,
+                                      rd_kafka_resp_err_t ErrorCode) {
+        rd_kafka_t *rk;
+        rd_kafka_mock_cluster_t *mcluster;
+        rd_kafka_error_t *error;
+
+        TEST_SAY(_C_MAG "[ %s ApiKey=%s ErrorCode=%s ]\n", __FUNCTION__,
+                 rd_kafka_ApiKey2str(ApiKey), rd_kafka_err2name(ErrorCode));
+
+        rk = create_txn_producer(&mcluster, "txnid", 3, NULL);
+
+        rd_kafka_mock_push_request_errors(mcluster,
+                                          ApiKey,
+                                          1,
+                                          ErrorCode);
+
+        error = rd_kafka_init_transactions(rk, 5000);
+        TEST_ASSERT(error, "Expected init_transactions() to fail");
+
+        TEST_SAY("init_transactions() failed: %s: %s\n",
+                 rd_kafka_err2name(rd_kafka_error_code(error)),
+                 rd_kafka_error_string(error));
+        TEST_ASSERT(rd_kafka_error_code(error) == ErrorCode,
+                    "Expected error %s, not %s",
+                    rd_kafka_err2name(ErrorCode),
+                    rd_kafka_err2name(rd_kafka_error_code(error)));
+        TEST_ASSERT(rd_kafka_error_is_fatal(error),
+                    "Expected error to be fatal");
+        TEST_ASSERT(!rd_kafka_error_is_retriable(error),
+                    "Expected error to not be retriable");
+        rd_kafka_error_destroy(error);
+
+        /* All done */
+
+        rd_kafka_destroy(rk);
+
+        TEST_SAY(_C_GRN "[ %s ApiKey=%s ErrorCode=%s PASS ]\n", __FUNCTION__,
+                 rd_kafka_ApiKey2str(ApiKey), rd_kafka_err2name(ErrorCode));
+}
+
+
 int main_0105_transactions_mock (int argc, char **argv) {
         if (test_needs_auth()) {
                 TEST_SKIP("Mock cluster does not support SSL/SASL\n");
@@ -782,6 +832,14 @@ int main_0105_transactions_mock (int argc, char **argv) {
         do_test_txns_send_offsets_concurrent_is_retriable();
 
         do_test_txns_no_timeout_crash();
+
+        do_test_txn_auth_failure(
+                RD_KAFKAP_InitProducerId,
+                RD_KAFKA_RESP_ERR_CLUSTER_AUTHORIZATION_FAILED);
+
+        do_test_txn_auth_failure(
+                RD_KAFKAP_FindCoordinator,
+                RD_KAFKA_RESP_ERR_CLUSTER_AUTHORIZATION_FAILED);
 
         if (!test_quick)
                 do_test_txn_switch_coordinator();
