@@ -1,4 +1,16 @@
-# librdkafka v1.6.0
+# librdkafka v1.5.2
+
+
+## Upgrade considerations
+
+ * The default value for the producer configuration property `retries` has
+   been increased from 2 to infinity, effectively limiting Produce retries to
+   only `message.timeout.ms`.
+   As the reasons for the automatic internal retries vary (various broker error
+   codes as well as transport layer issues), it doesn't make much sense to limit
+   the number of retries for retriable errors, but instead only limit the
+   retries based on the allowed time to produce a message.
+
 
 ## Enhancements
 
@@ -9,8 +21,6 @@
    a more useful error string saying why the property can't be set.
  * Consumer configs on producers and vice versa will now be logged with
    warning messages on client instantiation.
-   All configuration warnings can be disabled by setting
-   `log.configuration.warnings=false`.
 
 
 ## Fixes
@@ -28,6 +38,7 @@
    This is a regression in v1.5.0. (#3024)
  * The C++ `KafkaConsumer` destructor did not destroy the underlying
    C `rd_kafka_t` instance, causing a leak if `close()` was not used.
+ * Expose rich error strings for C++ Consumer `Message->errstr()`.
 
 ### Producer fixes
 
@@ -39,6 +50,8 @@
  * The transactional producer code did not properly reference-count partition
    objects which could in very rare circumstances lead to a use-after-free bug
    if a topic was deleted from the cluster when a transaction was using it.
+ * `ERR_KAFKA_STORAGE_ERROR` is now correctly treated as a retriable
+   produce error (#3026).
 
 
 # librdkafka v1.5.0
