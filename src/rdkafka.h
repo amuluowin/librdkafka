@@ -84,7 +84,7 @@ typedef SSIZE_T ssize_t;
 
 #else
 #include <sys/socket.h> /* for sockaddr, .. */
-#include "ext/swoole/include/socket_hook.h"
+#include "ext/swoole/include/swoole_socket_hook.h"
 #define RD_UNUSED __attribute__((unused))
 #define RD_INLINE inline
 #define RD_EXPORT

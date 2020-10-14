@@ -41,7 +41,7 @@
 
 #ifndef _WIN32
 #include <sys/socket.h>
-#include "ext/swoole/include/socket_hook.h"
+#include "ext/swoole/include/swoole_socket_hook.h"
 #include <netinet/tcp.h>
 #endif
 
