@@ -76,6 +76,7 @@ int          test_rusage = 0; /**< Check resource usage */
  *   <1.0: CPU is faster than base line system. */
 double       test_rusage_cpu_calibration = 1.0;
 static  const char *tests_to_run = NULL; /* all */
+int          test_write_report = 0; /**< Write test report file */
 
 static int show_summary = 1;
 static int test_summary (int do_lock);
@@ -221,6 +222,8 @@ _TEST_DECL(0112_assign_unknown_part);
 _TEST_DECL(0115_producer_auth);
 _TEST_DECL(0116_kafkaconsumer_close);
 _TEST_DECL(0117_mock_errors);
+_TEST_DECL(0118_commit_rebalance);
+_TEST_DECL(0119_consumer_auth);
 
 /* Manual tests */
 _TEST_DECL(8000_idle);
@@ -313,10 +316,12 @@ struct test tests[] = {
               /* Produces a lot of messages */
               _THRES(.ucpu = 30.0)),
 	_TEST(0045_subscribe_update, 0, TEST_BRKVER(0,9,0,0)),
-	_TEST(0045_subscribe_update_topic_remove, TEST_F_KNOWN_ISSUE,
-              TEST_BRKVER(0,9,0,0)),
+	_TEST(0045_subscribe_update_topic_remove, 0,
+              TEST_BRKVER(0,9,0,0),
+              .scenario = "noautocreate"),
         _TEST(0045_subscribe_update_non_exist_and_partchange, 0,
-              TEST_BRKVER(0,9,0,0)),
+              TEST_BRKVER(0,9,0,0),
+              .scenario = "noautocreate"),
 	_TEST(0046_rkt_cache, TEST_F_LOCAL),
 	_TEST(0047_partial_buf_tmout, TEST_F_KNOWN_ISSUE),
 	_TEST(0048_partitioner, 0,
@@ -411,6 +416,8 @@ struct test tests[] = {
         _TEST(0115_producer_auth, 0, TEST_BRKVER(2,1,0,0)),
         _TEST(0116_kafkaconsumer_close, TEST_F_LOCAL),
         _TEST(0117_mock_errors, TEST_F_LOCAL),
+        _TEST(0118_commit_rebalance, 0),
+        _TEST(0119_consumer_auth, 0, TEST_BRKVER(2,1,0,0)),
 
         /* Manual tests */
         _TEST(8000_idle, TEST_F_MANUAL),
@@ -511,16 +518,18 @@ static int test_closesocket_cb (int s, void *opaque) {
         TEST_LOCK();
         skm = sockem_find(s);
         if (skm) {
+                /* Close sockem's sockets */
                 sockem_close(skm);
                 test_socket_del(test, skm, 0/*nolock*/);
-        } else {
-#ifdef _WIN32
-                closesocket(s);
-#else
-                close(s);
-#endif
         }
         TEST_UNLOCK();
+
+        /* Close librdkafka's socket */
+#ifdef _WIN32
+        closesocket(s);
+#else
+        close(s);
+#endif
 
         return 0;
 }
@@ -1249,7 +1258,7 @@ static void run_tests (int argc, char **argv) {
  */
 static int test_summary (int do_lock) {
         struct test *test;
-        FILE *report_fp;
+        FILE *report_fp = NULL;
         char report_path[128];
         time_t t;
         struct tm *tm;
@@ -1268,25 +1277,30 @@ static int test_summary (int do_lock) {
 
         if ((tmp = test_getenv("TEST_REPORT", NULL)))
                 rd_snprintf(report_path, sizeof(report_path), "%s", tmp);
-        else
+        else if (test_write_report)
                 rd_snprintf(report_path, sizeof(report_path),
                             "test_report_%s.json", datestr);
-
-        report_fp = fopen(report_path, "w+");
-        if (!report_fp)
-                TEST_WARN("Failed to create report file %s: %s\n",
-                          report_path, strerror(errno));
         else
-                fprintf(report_fp,
-                        "{ \"id\": \"%s_%s\", \"mode\": \"%s\", "
-                        "\"scenario\": \"%s\", "
-			"\"date\": \"%s\", "
-			"\"git_version\": \"%s\", "
-			"\"broker_version\": \"%s\", "
-			"\"tests\": {",
-			datestr, test_mode, test_mode, test_scenario, datestr,
-			test_git_version,
-			test_broker_version_str);
+                report_path[0] = '\0';
+
+        if (*report_path) {
+                report_fp = fopen(report_path, "w+");
+                if (!report_fp)
+                        TEST_WARN("Failed to create report file %s: %s\n",
+                                  report_path, strerror(errno));
+                else
+                        fprintf(report_fp,
+                                "{ \"id\": \"%s_%s\", \"mode\": \"%s\", "
+                                "\"scenario\": \"%s\", "
+                                "\"date\": \"%s\", "
+                                "\"git_version\": \"%s\", "
+                                "\"broker_version\": \"%s\", "
+                                "\"tests\": {",
+                                datestr, test_mode, test_mode,
+                                test_scenario, datestr,
+                                test_git_version,
+                                test_broker_version_str);
+        }
 
         if (do_lock)
                 TEST_LOCK();
@@ -1582,6 +1596,8 @@ int main(int argc, char **argv) {
                         test_idempotent_producer = 1;
                 else if (!strcmp(argv[i], "-Q"))
                         test_quick = 1;
+                else if (!strcmp(argv[i], "-r"))
+                        test_write_report = 1;
                 else if (!strncmp(argv[i], "-R", 2)) {
                         test_rusage = 1;
                         test_concurrent_max = 1;
@@ -1607,6 +1623,7 @@ int main(int argc, char **argv) {
 			       "  -k/-K  Only/dont run tests with known issues\n"
                                "  -E     Don't run sockem tests\n"
                                "  -a     Assert on failures\n"
+                               "  -r     Write test_report_...json file.\n"
 			       "  -S     Dont show test summary\n"
                                "  -s <scenario> Test scenario.\n"
 			       "  -V <N.N.N.N> Broker version.\n"
@@ -2182,8 +2199,8 @@ rd_kafka_resp_err_t test_produce_sync (rd_kafka_t *rk, rd_kafka_topic_t *rkt,
  *
  * @param ... is a NULL-terminated list of key, value config property pairs.
  */
-void test_produce_msgs_easy_v (const char *topic,
-                               int32_t partition, uint64_t testid,
+void test_produce_msgs_easy_v (const char *topic, uint64_t testid,
+                               int32_t partition,
                                int msg_base, int cnt, size_t size, ...) {
         rd_kafka_conf_t *conf;
         rd_kafka_t *p;
@@ -2209,6 +2226,33 @@ void test_produce_msgs_easy_v (const char *topic,
 
         rd_kafka_topic_destroy(rkt);
         rd_kafka_destroy(p);
+}
+
+
+/**
+ * @brief A standard rebalance callback.
+ */
+void test_rebalance_cb (rd_kafka_t *rk,
+                        rd_kafka_resp_err_t err,
+                        rd_kafka_topic_partition_list_t *parts,
+                        void *opaque) {
+
+        TEST_SAY("%s: Rebalance: %s: %d partition(s)\n",
+                 rd_kafka_name(rk), rd_kafka_err2name(err), parts->cnt);
+
+        switch (err)
+        {
+        case RD_KAFKA_RESP_ERR__ASSIGN_PARTITIONS:
+                test_consumer_assign("assign", rk, parts);
+                break;
+        case RD_KAFKA_RESP_ERR__REVOKE_PARTITIONS:
+                test_consumer_unassign("unassign", rk);
+                break;
+        default:
+                TEST_FAIL("Unknown rebalance event: %s",
+                          rd_kafka_err2name(err));
+                break;
+        }
 }
 
 
@@ -3806,7 +3850,7 @@ void test_consumer_close (rd_kafka_t *rk) {
         rd_kafka_resp_err_t err;
         test_timing_t timing;
 
-        TEST_SAY("Closing consumer\n");
+        TEST_SAY("Closing consumer %s\n", rd_kafka_name(rk));
 
         TIMING_START(&timing, "CONSUMER.CLOSE");
         err = rd_kafka_consumer_close(rk);

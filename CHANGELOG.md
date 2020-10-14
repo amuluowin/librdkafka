@@ -1,5 +1,7 @@
 # librdkafka v1.5.2
 
+librdkafka v1.5.2 is a maintenance release.
+
 
 ## Upgrade considerations
 
@@ -10,6 +12,10 @@
    codes as well as transport layer issues), it doesn't make much sense to limit
    the number of retries for retriable errors, but instead only limit the
    retries based on the allowed time to produce a message.
+ * The default value for the producer configuration property
+   `request.timeout.ms` has been increased from 5 to 30 seconds to match
+   the Apache Kafka Java producer default.
+   This change yields increased robustness for broker-side congestion.
 
 
 ## Enhancements
@@ -25,11 +31,26 @@
 
 ## Fixes
 
+### Security fixes
+
+ * There was an incorrect call to zlib's `inflateGetHeader()` with
+   unitialized memory pointers that could lead to the GZIP header of a fetched
+   message batch to be copied to arbitrary memory.
+   This function call has now been completely removed since the result was
+   not used.
+   Reported by Ilja van Sprundel.
+
+
 ### General fixes
 
  * `rd_kafka_topic_opaque()` (used by the C++ API) would cause object
    refcounting issues when used on light-weight (error-only) topic objects
    such as consumer errors (#2693).
+ * Handle name resolution failures when formatting IP addresses in error logs,
+   and increase printed hostname limit to ~256 bytes (was ~60).
+ * Broker sockets would be closed twice (thus leading to potential race
+   condition with fd-reuse in other threads) if a custom `socket_cb` would
+   return error.
 
 ### Consumer fixes
 
@@ -39,6 +60,9 @@
  * The C++ `KafkaConsumer` destructor did not destroy the underlying
    C `rd_kafka_t` instance, causing a leak if `close()` was not used.
  * Expose rich error strings for C++ Consumer `Message->errstr()`.
+ * The consumer could get stuck if an outstanding commit failed during
+   rebalancing (#2933).
+ * Topic authorization errors during fetching are now reported only once (#3072).
 
 ### Producer fixes
 
@@ -52,6 +76,18 @@
    if a topic was deleted from the cluster when a transaction was using it.
  * `ERR_KAFKA_STORAGE_ERROR` is now correctly treated as a retriable
    produce error (#3026).
+ * Messages that timed out locally would not fail the ongoing transaction.
+   If the application did not take action on failed messages in its delivery
+   report callback and went on to commit the transaction, the transaction would
+   be successfully committed, simply omitting the failed messages.
+ * EndTxnRequests (sent on commit/abort) are only retried in allowed
+   states (#3041).
+   Previously the transaction could hang on commit_transaction() if an abortable
+   error was hit and the EndTxnRequest was to be retried.
+
+
+*Note: there was no v1.5.1 librdkafka release*
+
 
 
 # librdkafka v1.5.0

@@ -470,6 +470,12 @@ struct rd_kafka_s {
                 /**< Partitions added and registered to transaction. */
                 rd_kafka_toppar_tqhead_t txn_rktps;
 
+                /**< Number of messages that failed delivery.
+                 *   If this number is >0 on transaction_commit then an
+                 *   abortable transaction error will be raised.
+                 *   Is reset to zero on each begin_transaction(). */
+                rd_atomic64_t txn_dr_fails;
+
                 /**< Current transaction error. */
                 rd_kafka_resp_err_t txn_err;
 
@@ -909,8 +915,8 @@ rd_kafka_fatal_error_code (rd_kafka_t *rk) {
 extern rd_atomic32_t rd_kafka_thread_cnt_curr;
 extern char RD_TLS rd_kafka_thread_name[64];
 
-void rd_kafka_set_thread_name (const char *fmt, ...);
-void rd_kafka_set_thread_sysname (const char *fmt, ...);
+void rd_kafka_set_thread_name (const char *fmt, ...) RD_FORMAT(printf, 1, 2);
+void rd_kafka_set_thread_sysname (const char *fmt, ...) RD_FORMAT(printf, 1, 2);
 
 int rd_kafka_path_is_dir (const char *path);
 rd_bool_t rd_kafka_dir_is_empty (const char *path);

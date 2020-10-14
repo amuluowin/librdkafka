@@ -295,6 +295,11 @@ struct rd_kafka_toppar_s { /* rd_kafka_toppar_t */
 
 	char              *rktp_offset_path;     /* Path to offset file */
 	FILE              *rktp_offset_fp;       /* Offset file pointer */
+
+        rd_kafka_resp_err_t rktp_last_error;     /**< Last Fetch error.
+                                                  *   Used for suppressing
+                                                  *   reoccuring errors. */
+
         rd_kafka_cgrp_t   *rktp_cgrp;            /* Belongs to this cgrp */
 
         int                rktp_assigned;   /* Partition in cgrp assignment */
@@ -572,14 +577,11 @@ rd_kafka_toppar_t *
 rd_kafka_topic_partition_get_toppar (rd_kafka_t *rk,
                                      rd_kafka_topic_partition_t *rktpar);
 
-rd_kafka_toppar_t *
-rd_kafka_topic_partition_list_get_toppar (
-        rd_kafka_t *rk, rd_kafka_topic_partition_t *rktpar);
-
 void
 rd_kafka_topic_partition_list_update_toppars (rd_kafka_t *rk,
                                               rd_kafka_topic_partition_list_t
-                                              *rktparlist);
+                                              *rktparlist,
+                                              rd_bool_t create_on_miss);
 
 int
 rd_kafka_topic_partition_list_get_leaders (

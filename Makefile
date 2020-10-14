@@ -5,7 +5,7 @@ CHECK_FILES+=	CONFIGURATION.md \
 		examples/rdkafka_example_cpp
 
 DOC_FILES+=	LICENSE LICENSES.txt INTRODUCTION.md README.md \
-		CONFIGURATION.md STATISTICS.md
+		CONFIGURATION.md STATISTICS.md CHANGELOG.md
 
 PKGNAME?=	librdkafka
 VERSION?=	$(shell python3 packaging/get_version.py src/rdkafka.h)
@@ -19,7 +19,7 @@ MKL_COPYRIGHT_SKIP?=^(tests|packaging)
 
 .PHONY:
 
-all: mklove-check libs CONFIGURATION.md check
+all: mklove-check libs CONFIGURATION.md check TAGS
 
 include mklove/Makefile.base
 
@@ -87,11 +87,13 @@ TAGS: .PHONY
 	@(if which etags >/dev/null 2>&1 ; then \
 		echo "Using etags to generate $@" ; \
 		git ls-tree -r --name-only HEAD | egrep '\.(c|cpp|h)$$' | \
-			etags -f $@ - ; \
-	 else \
+			etags -f $@.tmp - ; \
+		cmp $@ $@.tmp || mv $@.tmp $@ ; rm -f $@.tmp ; \
+	 elif which ctags >/dev/null 2>&1 ; then \
 		echo "Using ctags to generate $@" ; \
 		git ls-tree -r --name-only HEAD | egrep '\.(c|cpp|h)$$' | \
-			ctags -e -f $@ -L- ; \
+			ctags -e -f $@.tmp -L- ; \
+		cmp $@ $@.tmp || mv $@.tmp $@ ; rm -f $@.tmp ; \
 	fi)
 
 coverity: Makefile.config
