@@ -377,6 +377,21 @@ rd_kafka_topic_t *rd_kafka_topic_new0 (rd_kafka_t *rk,
                 }
         }
 
+        if (rkt->rkt_rk->rk_conf.sticky_partition_linger_ms > 0 &&
+            rkt->rkt_conf.partitioner !=
+            rd_kafka_msg_partitioner_consistent &&
+            rkt->rkt_conf.partitioner !=
+            rd_kafka_msg_partitioner_murmur2 &&
+            rkt->rkt_conf.partitioner !=
+            rd_kafka_msg_partitioner_fnv1a) {
+                rkt->rkt_conf.random_partitioner = rd_false;
+        } else {
+                rkt->rkt_conf.random_partitioner = rd_true;
+        }
+
+        /* Sticky partition assignment interval */
+        rd_interval_init(&rkt->rkt_sticky_intvl);
+
         if (rkt->rkt_conf.queuing_strategy == RD_KAFKA_QUEUE_FIFO)
                 rkt->rkt_conf.msg_order_cmp = rd_kafka_msg_cmp_msgid;
         else
@@ -606,7 +621,8 @@ static int rd_kafka_toppar_leader_update (rd_kafka_topic_t *rkt,
                                           int32_t leader_id,
                                           rd_kafka_broker_t *leader) {
 	rd_kafka_toppar_t *rktp;
-	int r;
+        rd_bool_t fetching_from_follower;
+        int r = 0;
 
 	rktp = rd_kafka_toppar_get(rkt, partition, 0);
         if (unlikely(!rktp)) {
@@ -623,10 +639,13 @@ static int rd_kafka_toppar_leader_update (rd_kafka_topic_t *rkt,
 
         rd_kafka_toppar_lock(rktp);
 
-        if (leader != NULL &&
-            rktp->rktp_broker != NULL &&
-            rktp->rktp_broker->rkb_source != RD_KAFKA_INTERNAL &&
-            rktp->rktp_broker != leader &&
+        fetching_from_follower =
+                leader != NULL &&
+                rktp->rktp_broker != NULL &&
+                rktp->rktp_broker->rkb_source != RD_KAFKA_INTERNAL &&
+                rktp->rktp_broker != leader;
+
+        if (fetching_from_follower &&
             rktp->rktp_leader_id == leader_id) {
                 rd_kafka_dbg(rktp->rktp_rkt->rkt_rk, TOPIC, "BROKER",
                         "Topic %s [%"PRId32"]: leader %"PRId32" unchanged, "
@@ -635,13 +654,21 @@ static int rd_kafka_toppar_leader_update (rd_kafka_topic_t *rkt,
                         rktp->rktp_partition,
                         leader_id, rktp->rktp_broker_id);
                 r = 0;
+
         } else {
-                rktp->rktp_leader_id = leader_id;
-                if (rktp->rktp_leader)
-                        rd_kafka_broker_destroy(rktp->rktp_leader);
-                if (leader)
-                        rd_kafka_broker_keep(leader);
-                rktp->rktp_leader = leader;
+
+                if (rktp->rktp_leader_id != leader_id ||
+                    rktp->rktp_leader != leader) {
+                        /* Update leader if it has changed */
+                        rktp->rktp_leader_id = leader_id;
+                        if (rktp->rktp_leader)
+                                rd_kafka_broker_destroy(rktp->rktp_leader);
+                        if (leader)
+                                rd_kafka_broker_keep(leader);
+                        rktp->rktp_leader = leader;
+                }
+
+                /* Update handling broker */
                 r = rd_kafka_toppar_broker_update(rktp, leader_id, leader,
                                                   "leader updated");
         }
@@ -1091,7 +1118,7 @@ rd_kafka_topic_metadata_update (rd_kafka_topic_t *rkt,
         }
 
         /* Look up brokers before acquiring rkt lock to preserve lock order */
-        partbrokers = rd_alloca(mdt->partition_cnt * sizeof(*partbrokers));
+        partbrokers = rd_malloc(mdt->partition_cnt * sizeof(*partbrokers));
 
 	for (j = 0 ; j < mdt->partition_cnt ; j++) {
 		if (mdt->partitions[j].leader == -1) {
@@ -1202,6 +1229,7 @@ rd_kafka_topic_metadata_update (rd_kafka_topic_t *rkt,
 		if (partbrokers[j])
 			rd_kafka_broker_destroy(partbrokers[j]);
 
+        rd_free(partbrokers);
 
 	return upd;
 }
@@ -1568,6 +1596,7 @@ void *rd_kafka_topic_opaque (const rd_kafka_topic_t *app_rkt) {
         return app_rkt->rkt_conf.opaque;
 }
 
+
 int rd_kafka_topic_info_cmp (const void *_a, const void *_b) {
 	const rd_kafka_topic_info_t *a = _a, *b = _b;
 	int r;
@@ -1576,6 +1605,19 @@ int rd_kafka_topic_info_cmp (const void *_a, const void *_b) {
 		return r;
 
         return RD_CMP(a->partition_cnt, b->partition_cnt);
+}
+
+
+/**
+ * @brief string compare two topics.
+ *
+ * @param _a topic string (type char *)
+ * @param _b rd_kafka_topic_info_t * pointer.
+ */
+int rd_kafka_topic_info_topic_cmp (const void *_a, const void *_b) {
+        const char *a = _a;
+        const rd_kafka_topic_info_t *b = _b;
+        return strcmp(a, b->topic);
 }
 
 

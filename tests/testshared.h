@@ -46,6 +46,9 @@ typedef struct rd_kafka_s rd_kafka_t;
 #define _C_CYA "\033[36m"
 
 
+/** Test logging level (TEST_LEVEL=.. env) */
+extern int test_level;
+
 /** Test scenario */
 extern char test_scenario[64];
 
@@ -74,6 +77,9 @@ void test_delete_topic (rd_kafka_t *use_rk, const char *topicname);
 
 void test_create_topic (rd_kafka_t *use_rk, const char *topicname,
                         int partition_cnt, int replication_factor);
+
+void test_create_partitions (rd_kafka_t *use_rk, const char *topicname,
+                             int new_partition_cnt);
 
 void test_wait_topic_exists (rd_kafka_t *rk, const char *topic, int tmout);
 
@@ -307,6 +313,23 @@ static RD_UNUSED int TIMING_EVERY (test_timing_t *timing, int us) {
         }
         return 0;
 }
+
+
+/**
+ * Sub-tests
+ */
+int test_sub_start (const char *func, int line, int is_quick,
+                    const char *fmt, ...);
+void test_sub_pass (void);
+#define SUB_TEST0(IS_QUICK,...) do {                                    \
+                if (!test_sub_start(__FUNCTION__, __LINE__,             \
+                                    IS_QUICK, __VA_ARGS__))             \
+                        return;                                         \
+        } while (0)
+
+#define SUB_TEST(...) SUB_TEST0(rd_false, "" __VA_ARGS__)
+#define SUB_TEST_QUICK(...) SUB_TEST0(rd_true, "" __VA_ARGS__)
+#define SUB_TEST_PASS() test_sub_pass()
 
 
 #ifndef _WIN32

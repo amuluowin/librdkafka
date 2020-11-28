@@ -1,3 +1,58 @@
+# librdkafka v1.6.0
+
+librdkafka v1.6.0 is a feature release adding support for
+[KIP-429 Incremental rebalancing](https://cwiki.apache.org/confluence/display/KAFKA/KIP-429%3A+Kafka+Consumer+Incremental+Rebalance+Protocol)
+and the sticky consumer group partition assignor.
+
+ * Incremental rebalancing and assignments - FIXME
+ * Sticky consumer group partition assignor - FIXME
+ * Sticky producer partitioning (`sticky.partitioning.linger.ms`) -
+   achieves higher throughput and lower latency through sticky selection
+   of random partition.
+
+
+## Upgrade considerations
+
+ * Sticky producer partitioning is enabled by default (10 milliseconds) which
+   affects the distribution of randomly partitioned messages, where previously
+   these messages would be evenly distributed over the available partitions
+   they are now partitioned to a single partition for the duration of the
+   sticky time (10 milliseconds by default) before a new random sticky
+   partition is selected.
+
+
+## Enhancements
+
+ * Windows: Added `ssl.ca.certificate.stores` to specify a list of
+   Windows Certificate Stores to read CA certificates from, e.g.,
+   `CA,Root`. `Root` remains the default store.
+ * Use reentrant `rand_r()` on supporting platforms which decreases lock
+   contention (@azat).
+ * Added `assignor` debug context for troubleshooting consumer partition
+   assignments.
+ * Updated to OpenSSL v1.1.1h when building dependencies.
+ * Added `rd_kafka_conf_get_default_topic_conf()` to retrieve the
+   default topic configuration object from a global configuration object.
+
+
+## Fixes
+
+### General fixes
+
+ * Fix a use-after-free crash when certain coordinator requests were retried.
+
+
+### Consumer fixes
+
+ * The consumer assignment and consumer group implementations have been
+   decoupled, simplified and made more strict and robust. This will sort out
+   a number of edge cases for the consumer where the behaviour was previously
+   undefined.
+ * Consumer destroy without prior `close()` could hang in certain
+   cgrp states (@gridaphobe, #3127).
+ * Fix possible null dereference in `Message::errstr()` (#3140).
+ * Partition fetch state was not set to STOPPED if OffsetCommit failed.
+
 # librdkafka v1.5.2
 
 librdkafka v1.5.2 is a maintenance release.
@@ -27,7 +82,6 @@ librdkafka v1.5.2 is a maintenance release.
    a more useful error string saying why the property can't be set.
  * Consumer configs on producers and vice versa will now be logged with
    warning messages on client instantiation.
-
 
 ## Fixes
 
@@ -87,6 +141,7 @@ librdkafka v1.5.2 is a maintenance release.
 
 
 *Note: there was no v1.5.1 librdkafka release*
+
 
 
 

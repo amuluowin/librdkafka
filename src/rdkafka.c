@@ -495,6 +495,8 @@ static const struct rd_kafka_err_desc rd_kafka_err_descs[] = {
                   "Local: This instance has been fenced by a newer instance"),
         _ERR_DESC(RD_KAFKA_RESP_ERR__APPLICATION,
                   "Local: Application generated error"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR__ASSIGNMENT_LOST,
+                  "Local: Group partition assignment lost"),
 
 	_ERR_DESC(RD_KAFKA_RESP_ERR_UNKNOWN,
 		  "Unknown broker error"),
@@ -688,6 +690,31 @@ static const struct rd_kafka_err_desc rd_kafka_err_descs[] = {
                   "Broker: Broker failed to validate record"),
         _ERR_DESC(RD_KAFKA_RESP_ERR_UNSTABLE_OFFSET_COMMIT,
                   "Broker: There are unstable offsets that need to be cleared"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR_THROTTLING_QUOTA_EXCEEDED,
+                  "Broker: Throttling quota has been exceeded"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR_PRODUCER_FENCED,
+                  "Broker: There is a newer producer with the same "
+                  "transactionalId which fences the current one"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR_RESOURCE_NOT_FOUND,
+                  "Broker: Request illegally referred to resource that "
+                  "does not exist"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR_DUPLICATE_RESOURCE,
+                  "Broker: Request illegally referred to the same resource "
+                  "twice"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR_UNACCEPTABLE_CREDENTIAL,
+                  "Broker: Requested credential would not meet criteria for "
+                  "acceptability"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR_INCONSISTENT_VOTER_SET,
+                  "Broker: Indicates that the either the sender or recipient "
+                  "of a voter-only request is not one of the expected voters"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR_INVALID_UPDATE_VERSION,
+                  "Broker: Invalid update version"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR_FEATURE_UPDATE_FAILED,
+                  "Broker: Unable to update finalized features due to "
+                  "server error"),
+        _ERR_DESC(RD_KAFKA_RESP_ERR_PRINCIPAL_DESERIALIZATION_FAILURE,
+                  "Broker: Request principal deserialization failed during "
+                  "forwarding"),
 
 	_ERR_DESC(RD_KAFKA_RESP_ERR__END, NULL)
 };
@@ -898,8 +925,6 @@ void rd_kafka_destroy_final (rd_kafka_t *rk) {
         rd_kafka_wrlock(rk);
         rd_kafka_wrunlock(rk);
 
-        rd_kafka_assignors_term(rk);
-
         rd_kafka_metadata_cache_destroy(rk);
 
         /* Terminate SASL provider */
@@ -917,6 +942,14 @@ void rd_kafka_destroy_final (rd_kafka_t *rk) {
                 /* Reset queue forwarding (rep -> cgrp) */
                 rd_kafka_q_fwd_set(rk->rk_rep, NULL);
                 rd_kafka_cgrp_destroy_final(rk->rk_cgrp);
+        }
+
+        rd_kafka_assignors_term(rk);
+
+        if (rk->rk_type == RD_KAFKA_CONSUMER) {
+                rd_kafka_assignment_destroy(rk);
+                if (rk->rk_consumer.q)
+                        rd_kafka_q_destroy(rk->rk_consumer.q);
         }
 
 	/* Purge op-queues */
@@ -965,7 +998,6 @@ void rd_kafka_destroy_final (rd_kafka_t *rk) {
 	rd_kafka_anyconf_destroy(_RK_GLOBAL, &rk->rk_conf);
         rd_list_destroy(&rk->rk_broker_by_id);
 
-	rd_kafkap_bytes_destroy((rd_kafkap_bytes_t *)rk->rk_null_bytes);
 	rwlock_destroy(&rk->rk_lock);
 
 	rd_free(rk);
@@ -1191,6 +1223,11 @@ static void rd_kafka_destroy_internal (rd_kafka_t *rk) {
         /* Purge broker state change waiters */
         rd_list_destroy(&rk->rk_broker_state_change_waiters);
         mtx_unlock(&rk->rk_broker_state_change_lock);
+
+        if (rk->rk_type == RD_KAFKA_CONSUMER) {
+                if (rk->rk_consumer.q)
+                        rd_kafka_q_disable(rk->rk_consumer.q);
+        }
 
         rd_kafka_dbg(rk, GENERIC, "TERMINATE",
                      "Purging reply queue");
@@ -1953,7 +1990,8 @@ static int rd_kafka_thread_main (void *arg) {
         mtx_unlock(&rk->rk_init_lock);
 
 	while (likely(!rd_kafka_terminating(rk) ||
-		      rd_kafka_q_len(rk->rk_ops))) {
+		      rd_kafka_q_len(rk->rk_ops) ||
+                      (rk->rk_cgrp && (rk->rk_cgrp->rkcg_state != RD_KAFKA_CGRP_STATE_TERM)))) {
                 rd_ts_t sleeptime = rd_kafka_timers_next(
                         &rk->rk_timers, 1000*1000/*1s*/, 1/*lock*/);
                 rd_kafka_q_serve(rk->rk_ops, (int)(sleeptime / 1000), 0,
@@ -2060,7 +2098,7 @@ rd_kafka_t *rd_kafka_new (rd_kafka_type_t type, rd_kafka_conf_t *app_conf,
                                 * freed from rd_kafka_destroy_internal()
                                 * as the rk itself is destroyed. */
 
-        /* Seed PRNG */
+        /* Seed PRNG, don't bother about HAVE_RAND_R, since it is pretty cheap. */
         if (rk->rk_conf.enable_random_seed)
                 call_once(&rd_kafka_global_srand_once, rd_kafka_global_srand);
 
@@ -2137,9 +2175,6 @@ rd_kafka_t *rd_kafka_new (rd_kafka_type_t type, rd_kafka_conf_t *app_conf,
 
         /* Admin client defaults */
         rk->rk_conf.admin.request_timeout_ms = rk->rk_conf.socket_timeout_ms;
-
-	/* Convenience Kafka protocol null bytes */
-	rk->rk_null_bytes = rd_kafkap_bytes_new(NULL, 0);
 
 	if (rk->rk_conf.debug)
                 rk->rk_conf.log_level = LOG_DEBUG;
@@ -2253,17 +2288,25 @@ rd_kafka_t *rd_kafka_new (rd_kafka_type_t type, rd_kafka_conf_t *app_conf,
         }
 #endif
 
-	/* Client group, eligible both in consumer and producer mode. */
-        if (type == RD_KAFKA_CONSUMER &&
-	    RD_KAFKAP_STR_LEN(rk->rk_group_id) > 0)
-                rk->rk_cgrp = rd_kafka_cgrp_new(rk,
-                                                rk->rk_group_id,
-                                                rk->rk_client_id);
+        if (type == RD_KAFKA_CONSUMER) {
+                rd_kafka_assignment_init(rk);
 
-        if (type == RD_KAFKA_PRODUCER)
+                if (RD_KAFKAP_STR_LEN(rk->rk_group_id) > 0) {
+                        /* Create consumer group handle */
+                        rk->rk_cgrp = rd_kafka_cgrp_new(rk,
+                                                        rk->rk_group_id,
+                                                        rk->rk_client_id);
+                        rk->rk_consumer.q =
+                                rd_kafka_q_keep(rk->rk_cgrp->rkcg_q);
+                } else {
+                        /* Legacy consumer */
+                        rk->rk_consumer.q = rd_kafka_q_keep(rk->rk_rep);
+                }
+
+        } else if (type == RD_KAFKA_PRODUCER) {
                 rk->rk_eos.transactional_id =
-                        rd_kafkap_str_new(rk->rk_conf.eos.transactional_id,
-                                          -1);
+                        rd_kafkap_str_new(rk->rk_conf.eos.transactional_id, -1);
+        }
 
 #ifndef _WIN32
         /* Block all signals in newly created threads.
@@ -3121,10 +3164,6 @@ rd_kafka_position (rd_kafka_t *rk,
 		   rd_kafka_topic_partition_list_t *partitions) {
  	int i;
 
-	/* Set default offsets. */
-	rd_kafka_topic_partition_list_reset_offsets(partitions,
-						    RD_KAFKA_OFFSET_INVALID);
-
 	for (i = 0 ; i < partitions->cnt ; i++) {
 		rd_kafka_topic_partition_t *rktpar = &partitions->elems[i];
 		rd_kafka_toppar_t *rktp;
@@ -3491,15 +3530,16 @@ rd_kafka_poll_cb (rd_kafka_t *rk, rd_kafka_q_t *rkq, rd_kafka_op_t *rko,
                 break;
 
         case RD_KAFKA_OP_REBALANCE:
-                /* If EVENT_REBALANCE is enabled but rebalance_cb isnt
-                 * we need to perform a dummy assign for the application.
-                 * This might happen during termination with consumer_close() */
                 if (rk->rk_conf.rebalance_cb)
                         rk->rk_conf.rebalance_cb(
                                 rk, rko->rko_err,
                                 rko->rko_u.rebalance.partitions,
                                 rk->rk_conf.opaque);
                 else {
+                        /** If EVENT_REBALANCE is enabled but rebalance_cb
+                         *  isn't, we need to perform a dummy assign for the
+                         *  application. This might happen during termination
+                         *  with consumer_close() */
                         rd_kafka_dbg(rk, CGRP, "UNASSIGN",
                                      "Forcing unassign of %d partition(s)",
                                      rko->rko_u.rebalance.partitions ?
@@ -3515,6 +3555,11 @@ rd_kafka_poll_cb (rd_kafka_t *rk, rd_kafka_q_t *rkq, rd_kafka_op_t *rko,
                         rk, rko->rko_err,
 			rko->rko_u.offset_commit.partitions,
 			rko->rko_u.offset_commit.opaque);
+                break;
+
+        case RD_KAFKA_OP_FETCH_STOP|RD_KAFKA_OP_REPLY:
+                /* Reply from toppar FETCH_STOP */
+                rd_kafka_assignment_partition_stopped(rk, rko->rko_rktp);
                 break;
 
         case RD_KAFKA_OP_CONSUMER_ERR:

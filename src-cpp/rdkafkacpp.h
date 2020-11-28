@@ -111,7 +111,7 @@ namespace RdKafka {
  * @remark This value should only be used during compile time,
  *         for runtime checks of version use RdKafka::version()
  */
-#define RD_KAFKA_VERSION  0x010502ff
+#define RD_KAFKA_VERSION  0x01060000
 
 /**
  * @brief Returns the librdkafka version as integer.
@@ -290,6 +290,8 @@ enum ErrorCode {
         ERR__FENCED = -144,
         /** Application generated error */
         ERR__APPLICATION = -143,
+        /** Assignment lost */
+        ERR__ASSIGNMENT_LOST = -142,
 
         /** End internal error codes */
 	ERR__END = -100,
@@ -481,12 +483,33 @@ enum ErrorCode {
         ERR_ELECTION_NOT_NEEDED = 84,
         /** No partition reassignment is in progress */
         ERR_NO_REASSIGNMENT_IN_PROGRESS = 85,
-        /** Deleting offsets of a topic while the consumer group is subscribed to it */
+        /** Deleting offsets of a topic while the consumer group is
+         *  subscribed to it */
         ERR_GROUP_SUBSCRIBED_TO_TOPIC = 86,
         /** Broker failed to validate record */
         ERR_INVALID_RECORD = 87,
         /** There are unstable offsets that need to be cleared */
-        ERR_UNSTABLE_OFFSET_COMMIT = 88
+        ERR_UNSTABLE_OFFSET_COMMIT = 88,
+        /** Throttling quota has been exceeded */
+        ERR_THROTTLING_QUOTA_EXCEEDED = 89,
+        /** There is a newer producer with the same transactionalId
+         *  which fences the current one */
+        ERR_PRODUCER_FENCED = 90,
+        /** Request illegally referred to resource that does not exist */
+        ERR_RESOURCE_NOT_FOUND = 91,
+        /** Request illegally referred to the same resource twice */
+        ERR_DUPLICATE_RESOURCE = 92,
+        /** Requested credential would not meet criteria for acceptability */
+        ERR_UNACCEPTABLE_CREDENTIAL = 93,
+        /** Indicates that the either the sender or recipient of a
+         *  voter-only request is not one of the expected voters */
+        ERR_INCONSISTENT_VOTER_SET = 94,
+        /** Invalid update version */
+        ERR_INVALID_UPDATE_VERSION = 95,
+        /** Unable to update finalized features due to server error */
+        ERR_FEATURE_UPDATE_FAILED = 96,
+        /** Request principal deserialization failed during forwarding */
+        ERR_PRINCIPAL_DESERIALIZATION_FAILURE = 97
 };
 
 
@@ -897,7 +920,13 @@ public:
    * arbitrary rebalancing failures where \p err is neither of those.
    * @remark In this latter case (arbitrary error), the application must
    *         call unassign() to synchronize state.
-
+   *
+   * For eager/non-cooperative `partition.assignment.strategy` assignors,
+   * such as `range` and `roundrobin`, the application must use
+   * assign assign() to set and unassign() to clear the entire assignment.
+   * For the cooperative assignors, such as `cooperative-sticky`, the
+   * application must use incremental_assign() for ERR__ASSIGN_PARTITIONS and
+   * incremental_unassign() for ERR__REVOKE_PARTITIONS.
    *
    * Without a rebalance callback this is done automatically by librdkafka
    * but registering a rebalance callback gives the application flexibility
@@ -905,24 +934,34 @@ public:
    * such as fetching offsets from an alternate location (on assign)
    * or manually committing offsets (on revoke).
    *
+   * @sa RdKafka::KafkaConsumer::assign()
+   * @sa RdKafka::KafkaConsumer::incremental_assign()
+   * @sa RdKafka::KafkaConsumer::incremental_unassign()
+   * @sa RdKafka::KafkaConsumer::assignment_lost()
+   * @sa RdKafka::KafkaConsumer::rebalance_protocol()
+   *
    * The following example show's the application's responsibilities:
    * @code
    *    class MyRebalanceCb : public RdKafka::RebalanceCb {
    *     public:
    *      void rebalance_cb (RdKafka::KafkaConsumer *consumer,
-   *     	      RdKafka::ErrorCode err,
-   *                  std::vector<RdKafka::TopicPartition*> &partitions) {
+   *                    RdKafka::ErrorCode err,
+   *                    std::vector<RdKafka::TopicPartition*> &partitions) {
    *         if (err == RdKafka::ERR__ASSIGN_PARTITIONS) {
    *           // application may load offets from arbitrary external
    *           // storage here and update \p partitions
-   *
-   *           consumer->assign(partitions);
+   *           if (consumer->rebalance_protocol() == "COOPERATIVE")
+   *             consumer->incremental_assign(partitions);
+   *           else
+   *             consumer->assign(partitions);
    *
    *         } else if (err == RdKafka::ERR__REVOKE_PARTITIONS) {
    *           // Application may commit offsets manually here
    *           // if auto.commit.enable=false
-   *
-   *           consumer->unassign();
+   *           if (consumer->rebalance_protocol() == "COOPERATIVE")
+   *             consumer->incremental_unassign(partitions);
+   *           else
+   *             consumer->unassign();
    *
    *         } else {
    *           std::cerr << "Rebalancing error: " <<
@@ -932,9 +971,12 @@ public:
    *     }
    *  }
    * @endcode
+   *
+   * @remark The above example lacks error handling for assign calls, see
+   *         the examples/ directory.
    */
  virtual void rebalance_cb (RdKafka::KafkaConsumer *consumer,
-			    RdKafka::ErrorCode err,
+                            RdKafka::ErrorCode err,
                             std::vector<TopicPartition*>&partitions) = 0;
 
  virtual ~RebalanceCb() { }
@@ -2476,7 +2518,7 @@ public:
   /**
    * @brief Asynchronous version of RdKafka::KafkaConsumer::CommitSync()
    *
-   * @sa RdKafka::KafkaConsummer::commitSync()
+   * @sa RdKafka::KafkaConsumer::commitSync()
    */
   virtual ErrorCode commitAsync () = 0;
 
@@ -2487,7 +2529,7 @@ public:
    *
    * @remark This is the synchronous variant.
    *
-   * @sa RdKafka::KafkaConsummer::commitSync()
+   * @sa RdKafka::KafkaConsumer::commitSync()
    */
   virtual ErrorCode commitSync (Message *message) = 0;
 
@@ -2498,7 +2540,7 @@ public:
    *
    * @remark This is the asynchronous variant.
    *
-   * @sa RdKafka::KafkaConsummer::commitSync()
+   * @sa RdKafka::KafkaConsumer::commitSync()
    */
   virtual ErrorCode commitAsync (Message *message) = 0;
 
@@ -2555,7 +2597,7 @@ public:
   /**
    * @brief Retrieve committed offsets for topics+partitions.
    *
-   * @returns RD_KAFKA_RESP_ERR_NO_ERROR on success in which case the
+   * @returns ERR_NO_ERROR on success in which case the
    *          \p offset or \p err field of each \p partitions' element is filled
    *          in with the stored offset, or a partition specific error.
    *          Else returns an error code.
@@ -2566,7 +2608,7 @@ public:
   /**
    * @brief Retrieve current positions (offsets) for topics+partitions.
    *
-   * @returns RD_KAFKA_RESP_ERR_NO_ERROR on success in which case the
+   * @returns ERR_NO_ERROR on success in which case the
    *          \p offset or \p err field of each \p partitions' element is filled
    *          in with the stored offset, or a partition specific error.
    *          Else returns an error code.
@@ -2651,6 +2693,75 @@ public:
    */
   virtual ConsumerGroupMetadata *groupMetadata () = 0;
 
+
+  /** @brief Check whether the consumer considers the current assignment to
+   *         have been lost involuntarily. This method is only applicable for
+   *         use with a subscribing consumer. Assignments are revoked
+   *         immediately when determined to have been lost, so this method is
+   *         only useful within a rebalance callback. Partitions that have
+   *         been lost may already be owned by other members in the group and
+   *         therefore commiting offsets, for example, may fail.
+   *
+   * @remark Calling assign(), incremental_assign() or incremental_unassign()
+   *         resets this flag.
+   *
+   * @returns Returns true if the current partition assignment is considered
+   *          lost, false otherwise.
+   */
+  virtual bool assignment_lost () = 0;
+
+  /**
+   * @brief The rebalance protocol currently in use. This will be
+   *        "NONE" if the consumer has not (yet) joined a group, else it will
+   *        match the rebalance protocol ("EAGER", "COOPERATIVE") of the
+   *        configured and selected assignor(s). All configured
+   *        assignors must have the same protocol type, meaning
+   *        online migration of a consumer group from using one
+   *        protocol to another (in particular upgading from EAGER
+   *        to COOPERATIVE) without a restart is not currently
+   *        supported.
+   *
+   * @returns an empty string on error, or one of
+   *          "NONE", "EAGER", "COOPERATIVE" on success.
+   */
+
+  virtual std::string rebalance_protocol () = 0;
+
+
+  /**
+   * @brief Incrementally add \p partitions to the current assignment.
+   *
+   * If a COOPERATIVE assignor (i.e. incremental rebalancing) is being used,
+   * this method should be used in a rebalance callback to adjust the current
+   * assignment appropriately in the case where the rebalance type is
+   * ERR__ASSIGN_PARTITIONS. The application must pass the partition list
+   * passed to the callback (or a copy of it), even if the list is empty.
+   * This method may also be used outside the context of a rebalance callback.
+   *
+   * @returns NULL on success, or an error object if the operation was
+   *          unsuccessful.
+   *
+   * @remark The returned object must be deleted by the application.
+   */
+  virtual Error *incremental_assign (const std::vector<TopicPartition*> &partitions) = 0;
+
+
+  /**
+   * @brief Incrementally remove \p partitions from the current assignment.
+   *
+   * If a COOPERATIVE assignor (i.e. incremental rebalancing) is being used,
+   * this method should be used in a rebalance callback to adjust the current
+   * assignment appropriately in the case where the rebalance type is
+   * ERR__REVOKE_PARTITIONS. The application must pass the partition list
+   * passed to the callback (or a copy of it), even if the list is empty.
+   * This method may also be used outside the context of a rebalance callback.
+   *
+   * @returns NULL on success, or an error object if the operation was
+   *          unsuccessful.
+   *
+   * @remark The returned object must be deleted by the application.
+   */
+  virtual Error *incremental_unassign (const std::vector<TopicPartition*> &partitions) = 0;
 
 };
 

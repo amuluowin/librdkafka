@@ -235,6 +235,8 @@ struct rd_kafka_conf_s {
                 rd_kafka_cert_t *cert;
                 char *ca_location;
                 rd_kafka_cert_t *ca;
+                /** CSV list of Windows certificate stores */
+                char *ca_cert_stores;
                 char *crl_location;
                 char *keystore_location;
                 char *keystore_password;
@@ -340,7 +342,6 @@ struct rd_kafka_conf_s {
         char *partition_assignment_strategy;
         rd_list_t partition_assignors;
 	int enabled_assignor_cnt;
-        struct rd_kafka_assignor_s *assignor;
 
         void (*rebalance_cb) (rd_kafka_t *rk,
                               rd_kafka_resp_err_t err,
@@ -387,7 +388,8 @@ struct rd_kafka_conf_s {
 	int    batch_num_messages;
         int    batch_size;
 	rd_kafka_compression_t compression_codec;
-	int    dr_err_only;
+        int    dr_err_only;
+        int    sticky_partition_linger_ms;
 
 	/* Message delivery report callback.
 	 * Called once for each produced message, either on
@@ -526,6 +528,9 @@ struct rd_kafka_topic_conf_s {
 				void *rkt_opaque,
 				void *msg_opaque);
         char   *partitioner_str;
+
+        rd_bool_t random_partitioner; /**< rd_true - random
+                                        *  rd_false - sticky */
 
         int queuing_strategy; /* RD_KAFKA_QUEUE_FIFO|LIFO */
         int (*msg_order_cmp) (const void *a, const void *b);

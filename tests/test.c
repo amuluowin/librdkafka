@@ -75,7 +75,8 @@ int          test_rusage = 0; /**< Check resource usage */
  *   >1.0: CPU is slower than base line system,
  *   <1.0: CPU is faster than base line system. */
 double       test_rusage_cpu_calibration = 1.0;
-static  const char *tests_to_run = NULL; /* all */
+static const char *tests_to_run = NULL; /* all */
+static const char *subtests_to_run = NULL; /* all */
 int          test_write_report = 0; /**< Write test report file */
 
 static int show_summary = 1;
@@ -219,6 +220,9 @@ _TEST_DECL(0109_auto_create_topics);
 _TEST_DECL(0110_batch_size);
 _TEST_DECL(0111_delay_create_topics);
 _TEST_DECL(0112_assign_unknown_part);
+_TEST_DECL(0113_cooperative_rebalance_local);
+_TEST_DECL(0113_cooperative_rebalance);
+_TEST_DECL(0114_sticky_partitioning);
 _TEST_DECL(0115_producer_auth);
 _TEST_DECL(0116_kafkaconsumer_close);
 _TEST_DECL(0117_mock_errors);
@@ -413,6 +417,10 @@ struct test tests[] = {
         _TEST(0111_delay_create_topics, 0, TEST_BRKVER_TOPIC_ADMINAPI,
               .scenario = "noautocreate"),
         _TEST(0112_assign_unknown_part, 0),
+        _TEST(0113_cooperative_rebalance_local, TEST_F_LOCAL,
+              TEST_BRKVER(2,4,0,0)),
+        _TEST(0113_cooperative_rebalance, 0, TEST_BRKVER(2,4,0,0)),
+        _TEST(0114_sticky_partitioning, 0),
         _TEST(0115_producer_auth, 0, TEST_BRKVER(2,1,0,0)),
         _TEST(0116_kafkaconsumer_close, TEST_F_LOCAL),
         _TEST(0117_mock_errors, TEST_F_LOCAL),
@@ -1117,9 +1125,12 @@ static void check_test_timeouts (void) {
                         test_summary(0/*no-locks*/);
                         TEST_FAIL0(__FILE__,__LINE__,0/*nolock*/,
                                    0/*fail-later*/,
-                                   "Test %s timed out "
+                                   "Test %s%s%s%s timed out "
                                    "(timeout set to %d seconds)\n",
                                    test->name,
+                                   *test->subtest ? " (" : "",
+                                   test->subtest,
+                                   *test->subtest ? ")" : "",
                                    (int)(test->timeout-
                                          test->start)/
                                    1000000);
@@ -1547,6 +1558,7 @@ int main(int argc, char **argv) {
         signal(SIGINT, test_sig_term);
 #endif
         tests_to_run = test_getenv("TESTS", NULL);
+        subtests_to_run = test_getenv("SUBTESTS", NULL);
         tmpver = test_getenv("TEST_KAFKA_VERSION", NULL);
         if (!tmpver)
                 tmpver = test_getenv("KAFKA_VERSION", test_broker_version_str);
@@ -1638,6 +1650,8 @@ int main(int argc, char **argv) {
 			       "\n"
 			       "Environment variables:\n"
 			       "  TESTS - substring matched test to run (e.g., 0033)\n"
+                               "  SUBTESTS - substring matched subtest to run "
+                               "(e.g., n_wildcard)\n"
 			       "  TEST_KAFKA_VERSION - broker version (e.g., 0.9.0.1)\n"
                                "  TEST_SCENARIO - Test scenario\n"
 			       "  TEST_LEVEL - Test verbosity level\n"
@@ -1709,6 +1723,8 @@ int main(int argc, char **argv) {
                 test_timeout_multiplier += (double)test_concurrent_max / 3;
 
 	TEST_SAY("Tests to run : %s\n", tests_to_run ? tests_to_run : "all");
+        if (subtests_to_run)
+                TEST_SAY("Sub tests    : %s\n", subtests_to_run);
         TEST_SAY("Test mode    : %s%s%s\n",
                  test_quick ? "quick, ":"",
                  test_mode,
@@ -2632,6 +2648,26 @@ void test_consumer_assign (const char *what, rd_kafka_t *rk,
 }
 
 
+void test_consumer_incremental_assign (const char *what, rd_kafka_t *rk,
+                                       rd_kafka_topic_partition_list_t
+                                       *partitions) {
+        rd_kafka_error_t *error;
+        test_timing_t timing;
+
+        TIMING_START(&timing, "INCREMENTAL.ASSIGN.PARTITIONS");
+        error = rd_kafka_incremental_assign(rk, partitions);
+        TIMING_STOP(&timing);
+        if (error) {
+                TEST_FAIL("%s: incremental assign of %d partition(s) failed: "
+                          "%s", what, partitions->cnt,
+                          rd_kafka_error_string(error));
+                rd_kafka_error_destroy(error);
+        } else
+                TEST_SAY("%s: incremental assign of %d partition(s) done\n",
+                         what, partitions->cnt);
+}
+
+
 void test_consumer_unassign (const char *what, rd_kafka_t *rk) {
         rd_kafka_resp_err_t err;
         test_timing_t timing;
@@ -2644,6 +2680,26 @@ void test_consumer_unassign (const char *what, rd_kafka_t *rk) {
                           what, rd_kafka_err2str(err));
         else
                 TEST_SAY("%s: unassigned current partitions\n", what);
+}
+
+
+void test_consumer_incremental_unassign (const char *what, rd_kafka_t *rk,
+                                         rd_kafka_topic_partition_list_t
+                                         *partitions) {
+        rd_kafka_error_t *error;
+        test_timing_t timing;
+
+        TIMING_START(&timing, "INCREMENTAL.UNASSIGN.PARTITIONS");
+        error = rd_kafka_incremental_unassign(rk, partitions);
+        TIMING_STOP(&timing);
+        if (error) {
+                TEST_FAIL("%s: incremental unassign of %d partition(s) "
+                          "failed: %s", what, partitions->cnt,
+                          rd_kafka_error_string(error));
+                rd_kafka_error_destroy(error);
+        } else
+                TEST_SAY("%s: incremental unassign of %d partition(s) done\n",
+                         what, partitions->cnt);
 }
 
 
@@ -3893,6 +3949,18 @@ char *test_conf_get (const rd_kafka_conf_t *conf, const char *name) {
 		TEST_FAIL("Failed to get config \"%s\": %s\n", name,
 			  "unknown property");
 	return ret;
+}
+
+
+char *test_topic_conf_get (const rd_kafka_topic_conf_t *tconf,
+                           const char *name) {
+        static RD_TLS char ret[256];
+        size_t ret_sz = sizeof(ret);
+        if (rd_kafka_topic_conf_get(tconf, name, ret, &ret_sz) !=
+            RD_KAFKA_CONF_OK)
+                TEST_FAIL("Failed to get topic config \"%s\": %s\n", name,
+                          "unknown property");
+        return ret;
 }
 
 
@@ -5727,7 +5795,9 @@ void test_fail0 (const char *file, int line, const char *function,
         if (t)
                 *t = '\0';
 
-        of = rd_snprintf(buf, sizeof(buf), "%s():%i: ", function, line);
+        of = rd_snprintf(buf, sizeof(buf), "%s%s%s():%i: ",
+                         test_curr->subtest, *test_curr->subtest ? ": " : "",
+                         function, line);
         rd_assert(of < sizeof(buf));
 
         va_start(ap, fmt);
@@ -5739,10 +5809,15 @@ void test_fail0 (const char *file, int line, const char *function,
                 *t = '\0';
 
         TEST_SAYL(0, "TEST FAILURE\n");
-        fprintf(stderr, "\033[31m### Test \"%s\" failed at %s:%i:%s() at %s: "
+        fprintf(stderr,
+                "\033[31m### Test \"%s%s%s%s\" failed at %s:%i:%s() at %s: "
                 "###\n"
                 "%s\n",
-                test_curr->name, file, line, function, timestr, buf+of);
+                test_curr->name,
+                *test_curr->subtest ? " (" : "",
+                test_curr->subtest,
+                *test_curr->subtest ? ")" : "",
+                file, line, function, timestr, buf+of);
         if (do_lock)
                 TEST_LOCK();
         test_curr->state = TEST_FAILED;
@@ -5803,4 +5878,57 @@ rd_kafka_mock_cluster_t *test_mock_cluster_new (int broker_cnt,
                 *bootstraps = rd_kafka_mock_cluster_bootstraps(mcluster);
 
         return mcluster;
+}
+
+
+
+/**
+ * @name Sub-tests
+ */
+
+
+/**
+ * @brief Start a sub-test. \p fmt is optional and allows additional
+ *        sub-test info to be displayed, e.g., test parameters.
+ *
+ * @returns 0 if sub-test should not be run, else 1.
+ */
+int test_sub_start (const char *func, int line, int is_quick,
+                    const char *fmt, ...) {
+
+        if (!is_quick && test_quick)
+                return 0;
+
+        if (subtests_to_run && !strstr(func, subtests_to_run))
+                return 0;
+
+        if (fmt && *fmt) {
+                va_list ap;
+                char buf[256];
+
+                va_start(ap, fmt);
+                rd_vsnprintf(buf, sizeof(buf), fmt, ap);
+                va_end(ap);
+
+                rd_snprintf(test_curr->subtest, sizeof(test_curr->subtest),
+                            "%s:%d: %s", func, line, buf);
+        } else {
+                rd_snprintf(test_curr->subtest, sizeof(test_curr->subtest),
+                            "%s:%d", func, line);
+        }
+
+        TEST_SAY(_C_MAG "[ %s ]\n", test_curr->subtest);
+
+        return 1;
+}
+
+
+/**
+ * @brief Sub-test has passed.
+ */
+void test_sub_pass (void) {
+        TEST_ASSERT(*test_curr->subtest);
+
+        TEST_SAY(_C_GRN "[ %s: PASS ]\n", test_curr->subtest);
+        *test_curr->subtest = '\0';
 }

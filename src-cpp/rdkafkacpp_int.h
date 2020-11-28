@@ -359,11 +359,13 @@ class MessageImpl : public Message {
   }
 
   std::string         errstr() const {
+    const char *es;
     /* message_errstr() is only available for the consumer. */
     if (rk_type_ == RD_KAFKA_CONSUMER)
-      return std::string(rd_kafka_message_errstr(rkmessage_));
+      es = rd_kafka_message_errstr(rkmessage_);
+    else
+      es = rd_kafka_err2str(rkmessage_->err);
 
-    const char *es = rd_kafka_err2str(rkmessage_->err);
     return std::string(es ? es : "");
   }
 
@@ -1114,11 +1116,18 @@ public:
   static KafkaConsumer *create (Conf *conf, std::string &errstr);
 
   ErrorCode assignment (std::vector<TopicPartition*> &partitions);
+  bool assignment_lost ();
+  std::string rebalance_protocol () {
+    const char *str = rd_kafka_rebalance_protocol(rk_);
+    return std::string(str ? str : "");
+  }
   ErrorCode subscription (std::vector<std::string> &topics);
   ErrorCode subscribe (const std::vector<std::string> &topics);
   ErrorCode unsubscribe ();
   ErrorCode assign (const std::vector<TopicPartition*> &partitions);
   ErrorCode unassign ();
+  Error *incremental_assign (const std::vector<TopicPartition*> &partitions);
+  Error *incremental_unassign (const std::vector<TopicPartition*> &partitions);
 
   Message *consume (int timeout_ms);
   ErrorCode commitSync () {

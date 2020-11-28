@@ -38,6 +38,7 @@
 #include "rdkafka_feature.h"
 #include "rdkafka_interceptor.h"
 #include "rdkafka_idempotence.h"
+#include "rdkafka_assignor.h"
 #include "rdkafka_sasl_oauthbearer.h"
 #if WITH_PLUGINS
 #include "rdkafka_plugin.h"
@@ -456,6 +457,7 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
                         { RD_KAFKA_DBG_ADMIN,    "admin" },
                         { RD_KAFKA_DBG_EOS,      "eos" },
                         { RD_KAFKA_DBG_MOCK,     "mock" },
+                        { RD_KAFKA_DBG_ASSIGNOR, "assignor" },
 			{ RD_KAFKA_DBG_ALL,      "all" }
 		} },
 	{ _RK_GLOBAL, "socket.timeout.ms", _RK_C_INT, _RK(socket_timeout_ms),
@@ -587,10 +589,10 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
 	  0, 1, 1 },
         { _RK_GLOBAL, "enable.random.seed", _RK_C_BOOL,
           _RK(enable_random_seed),
-          "If enabled librdkafka will initialize the POSIX PRNG "
+          "If enabled librdkafka will initialize the PRNG "
           "with srand(current_time.milliseconds) on the first invocation of "
-          "rd_kafka_new(). If disabled the application must call srand() "
-          "prior to calling rd_kafka_new().",
+          "rd_kafka_new() (required only if rand_r() is not available on your platform). "
+          "If disabled the application must call srand() prior to calling rd_kafka_new().",
           0, 1, 1 },
 	{ _RK_GLOBAL, "log.connection.close", _RK_C_BOOL,
 	  _RK(log_connection_close),
@@ -787,6 +789,20 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
           .copy = rd_kafka_conf_cert_copy,
           _UNSUPPORTED_SSL
         },
+        { _RK_GLOBAL, "ssl.ca.certificate.stores", _RK_C_STR,
+          _RK(ssl.ca_cert_stores),
+          "Comma-separated list of Windows Certificate stores to load "
+          "CA certificates from. Certificates will be loaded in the same "
+          "order as stores are specified. If no certificates can be loaded "
+          "from any of the specified stores an error is logged and the "
+          "OpenSSL library's default CA location is used instead. "
+          "Store names are typically one or more of: MY, Root, Trust, CA.",
+          .sdef = "Root",
+#if !defined(_WIN32)
+          .unsupported = "configuration only valid on Windows"
+#endif
+        },
+
         { _RK_GLOBAL, "ssl.crl.location", _RK_C_STR,
           _RK(ssl.crl_location),
           "Path to CRL for verifying broker's certificate validity.",
@@ -1000,9 +1016,16 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
         { _RK_GLOBAL|_RK_CGRP|_RK_MED, "partition.assignment.strategy",
           _RK_C_STR,
           _RK(partition_assignment_strategy),
-          "Name of partition assignment strategy to use when elected "
-          "group leader assigns partitions to group members.",
-	  .sdef = "range,roundrobin" },
+          "The name of one or more partition assignment strategies. The "
+          "elected group leader will use a strategy supported by all "
+          "members of the group to assign partitions to group members. If "
+          "there is more than one eligible strategy, preference is "
+          "determined by the order of this list (strategies earlier in the "
+          "list have higher priority). "
+          "Cooperative and non-cooperative (eager) strategies must not be "
+          "mixed. "
+          "Available strategies: range, roundrobin, cooperative-sticky.",
+          .sdef = "range,roundrobin" },
         { _RK_GLOBAL|_RK_CGRP|_RK_HIGH, "session.timeout.ms", _RK_C_INT,
           _RK(group_session_timeout_ms),
           "Client group session and failure detection timeout. "
@@ -1022,7 +1045,8 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
           1, 3600*1000, 3*1000 },
         { _RK_GLOBAL|_RK_CGRP, "group.protocol.type", _RK_C_KSTR,
           _RK(group_protocol_type),
-          "Group protocol type",
+          "Group protocol type. NOTE: Currently, the only supported group "
+          "protocol type is `consumer`.",
           .sdef = "consumer" },
         { _RK_GLOBAL|_RK_CGRP, "coordinator.query.interval.ms", _RK_C_INT,
           _RK(coord_query_intvl_ms),
@@ -1350,6 +1374,19 @@ static const struct rd_kafka_property rd_kafka_properties[] = {
 	{ _RK_GLOBAL|_RK_PRODUCER, "dr_msg_cb", _RK_C_PTR,
 	  _RK(dr_msg_cb),
 	  "Delivery report callback (set with rd_kafka_conf_set_dr_msg_cb())" },
+        { _RK_GLOBAL|_RK_PRODUCER, "sticky.partitioning.linger.ms", _RK_C_INT,
+          _RK(sticky_partition_linger_ms),
+          "Delay in milliseconds to wait to assign new sticky partitions for "
+          "each topic. "
+          "By default, set to double the time of linger.ms. To disable sticky "
+          "behavior, set to 0. "
+          "This behavior affects messages with the key NULL in all cases, and "
+          "messages with key lengths of zero when the consistent_random "
+          "partitioner is in use. "
+          "These messages would otherwise be assigned randomly. "
+          "A higher value allows for more effective batching of these "
+          "messages.",
+          0, 900000, 10 },
 
 
         /*
@@ -2778,6 +2815,11 @@ void rd_kafka_conf_set_default_topic_conf (rd_kafka_conf_t *conf,
                                       tconf);
 }
 
+rd_kafka_topic_conf_t *
+rd_kafka_conf_get_default_topic_conf (rd_kafka_conf_t *conf) {
+        return conf->topic_conf;
+}
+
 
 void
 rd_kafka_topic_conf_set_partitioner_cb (rd_kafka_topic_conf_t *topic_conf,
@@ -3566,6 +3608,7 @@ const char *rd_kafka_conf_finalize (rd_kafka_type_t cltype,
 #endif
 
         if (cltype == RD_KAFKA_CONSUMER) {
+
                 /* Automatically adjust `fetch.max.bytes` to be >=
                  * `message.max.bytes` and <= `queued.max.message.kbytes`
                  * unless set by user. */
@@ -3679,6 +3722,11 @@ const char *rd_kafka_conf_finalize (rd_kafka_type_t cltype,
                                 return "`enable.gapless.guarantee` requires "
                                         "`enable.idempotence` to be enabled";
                 }
+
+                if (!rd_kafka_conf_is_modified(
+                            conf, "sticky.partitioning.linger.ms"))
+                        conf->sticky_partition_linger_ms = (int) RD_MIN(900000,
+                                (rd_ts_t) (2 * conf->buffering_max_ms_dbl));
         }
 
 

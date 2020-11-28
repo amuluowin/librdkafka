@@ -735,6 +735,8 @@ static void do_test_AlterConfigs (rd_kafka_t *rk, rd_kafka_queue_t *rkqu) {
 
         test_CreateTopics_simple(rk, NULL, topics, 1, 1, NULL);
 
+        test_wait_topic_exists(rk, topics[0], 10000);
+
         /*
          * ConfigResource #0: valid topic config
          */
@@ -788,7 +790,10 @@ static void do_test_AlterConfigs (rd_kafka_t *rk, rd_kafka_queue_t *rkqu) {
                                                  "12345");
         TEST_ASSERT(!err, "%s", rd_kafka_err2str(err));
 
-        exp_err[ci] = RD_KAFKA_RESP_ERR_UNKNOWN;
+        if (test_broker_version >= TEST_BRKVER(2, 7, 0, 0))
+                exp_err[ci] = RD_KAFKA_RESP_ERR_UNKNOWN_TOPIC_OR_PART;
+        else
+                exp_err[ci] = RD_KAFKA_RESP_ERR_UNKNOWN;
         ci++;
 
 
